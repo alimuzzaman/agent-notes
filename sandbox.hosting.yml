@@ -40,6 +40,9 @@ environments:
         FEATURE_SHARE_LINKS: "true"
         FEATURE_TAILNET_TRUST: "true"
         TAILNET_TRUST_USER_EMAIL: notes-admin@example.test
+        # Owner requests (2026-11-10): 128-bit random slugs for new notes, and nothing indexable.
+        SLUG_BYTES: "16"
+        ROBOTS_NOINDEX: "true"
         AGENT_NOTES_TAILNET_BIND: 127.0.0.1
         AGENT_NOTES_TAILNET_PORT: "8091"
       generated:

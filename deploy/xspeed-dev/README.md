@@ -92,11 +92,15 @@ server {
 
 ## 7. First sign-in and checks
 
+The manifest sets `SLUG_BYTES=16` (new notes get 22-character random slugs; old 8-character links keep working) and `ROBOTS_NOINDEX=true`. The `migrate` service applies migration 002 before the app starts. It widens `notes.slug` and clears cached PDFs once.
+
+
 1. On a tailnet device, open `https://notes.xspeedcdn.online/dashboard`. You are signed in as `notes-admin@example.test` with no code. Create an API token there.
 2. Connect an agent: `claude mcp add --transport http --scope user agent-notes https://notes.xspeedcdn.online/mcp --header "Authorization: Bearer <token>"`.
 3. From a machine **off** the tailnet, each of these must return the same `404 Not found.` with no `Set-Cookie`: `https://share.xspeedcdn.online/`, `/dashboard`, `/login`, `POST /mcp`, and `/n/<slug>` of a tailnet note. `/robots.txt` returns 200.
 4. Off the tailnet, `https://notes.xspeedcdn.online` must not connect (the name resolves to the tailnet IP).
-5. Create a share link from the dashboard or with `create_share_link`, then open it off the tailnet. It lands on `/n/<slug>` with no token in the address bar. Revoke it, and a reload returns 404.
+5. Every response on both hosts carries `X-Robots-Tag: noindex, nofollow, noarchive`: `curl -sI https://share.xspeedcdn.online/ | grep -i x-robots` (the 404 too).
+6. Create a share link from the dashboard or with `create_share_link`, then open it off the tailnet. It lands on `/n/<slug>` with no token in the address bar. Revoke it, and a reload returns 404.
 
 ## 8. Rollback
 
