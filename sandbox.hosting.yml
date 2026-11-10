@@ -1,0 +1,51 @@
+# Agent Notes on the Sandbox remote xspeed-dev (fork only; not part of the upstream PR).
+# Public host share.xspeedcdn.online goes through Sandbox's front door to web:8080 (public scope).
+# The full app notes.xspeedcdn.online is a hand-made tailnet nginx block to 127.0.0.1:8091 (web:8081).
+# Runbook: deploy/xspeed-dev/README.md
+version: 1
+project: agent-notes
+environments:
+  sandbox:
+    compose:
+      files: [compose.yml]
+      build: true
+      build_timeout_seconds: 900
+      service: web
+      container_port: 8080
+      init_services: [migrate]
+      background_services: [db, app]
+    healthcheck:
+      path: /robots.txt
+      statuses: [200]
+    deploy:
+      allowed_branches: [main, feat/html-notes-images-visibility]
+      require_clean: true
+    robots: deny
+    host:
+      primary: share.xspeedcdn.online
+    cloudflare:
+      proxied: false
+      tls: acme
+      dns: exact
+    secrets:
+      values:
+        APP_NAME: Agent Notes
+        APP_URL: https://notes.xspeedcdn.online
+        PUBLIC_URL: https://share.xspeedcdn.online
+        FEATURE_HTML_NOTES: "true"
+        FEATURE_ASSETS: "true"
+        FEATURE_VISIBILITY: "true"
+        FEATURE_SHARE_LINKS: "true"
+        AGENT_NOTES_TAILNET_BIND: 127.0.0.1
+        AGENT_NOTES_TAILNET_PORT: "8091"
+        MAIL_PRIMARY_PORT: "587"
+        MAIL_PRIMARY_ENCRYPTION: tls
+      required:
+        ADMIN_EMAIL: AGENT_NOTES_ADMIN_EMAIL
+        MAIL_PRIMARY_HOST: AGENT_NOTES_MAIL_HOST
+        MAIL_PRIMARY_USERNAME: AGENT_NOTES_MAIL_USERNAME
+        MAIL_PRIMARY_PASSWORD: AGENT_NOTES_MAIL_PASSWORD
+        MAIL_PRIMARY_FROM_ADDRESS: AGENT_NOTES_MAIL_FROM_ADDRESS
+      generated:
+        DB_PASSWORD: AGENT_NOTES_DB_PASSWORD
+        DB_ROOT_PASSWORD: AGENT_NOTES_DB_ROOT_PASSWORD

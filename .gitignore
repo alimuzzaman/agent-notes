@@ -54,3 +54,6 @@ Thumbs.db
 
 # Note assets (FEATURE_ASSETS) default location
 /storage/
+
+# Sandbox local state
+.sandbox/
