@@ -1,6 +1,8 @@
 # Agent Notes on the Sandbox remote xspeed-dev (fork only; not part of the upstream PR).
 # Public host share.xspeedcdn.online goes through Sandbox's front door to web:8080 (public scope).
 # The full app notes.xspeedcdn.online is a hand-made tailnet nginx block to 127.0.0.1:8091 (web:8081).
+# Everyone on the tailnet is trusted (owner decision, 2026-11-10): FEATURE_TAILNET_TRUST signs them in as
+# notes-admin@example.test, so no mail is configured at all.
 # Runbook: deploy/xspeed-dev/README.md
 version: 1
 project: agent-notes
@@ -36,16 +38,10 @@ environments:
         FEATURE_ASSETS: "true"
         FEATURE_VISIBILITY: "true"
         FEATURE_SHARE_LINKS: "true"
+        FEATURE_TAILNET_TRUST: "true"
+        TAILNET_TRUST_USER_EMAIL: notes-admin@example.test
         AGENT_NOTES_TAILNET_BIND: 127.0.0.1
         AGENT_NOTES_TAILNET_PORT: "8091"
-        MAIL_PRIMARY_PORT: "587"
-        MAIL_PRIMARY_ENCRYPTION: tls
-      required:
-        ADMIN_EMAIL: AGENT_NOTES_ADMIN_EMAIL
-        MAIL_PRIMARY_HOST: AGENT_NOTES_MAIL_HOST
-        MAIL_PRIMARY_USERNAME: AGENT_NOTES_MAIL_USERNAME
-        MAIL_PRIMARY_PASSWORD: AGENT_NOTES_MAIL_PASSWORD
-        MAIL_PRIMARY_FROM_ADDRESS: AGENT_NOTES_MAIL_FROM_ADDRESS
       generated:
         DB_PASSWORD: AGENT_NOTES_DB_PASSWORD
         DB_ROOT_PASSWORD: AGENT_NOTES_DB_ROOT_PASSWORD

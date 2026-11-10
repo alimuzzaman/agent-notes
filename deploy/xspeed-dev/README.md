@@ -18,19 +18,14 @@ Server facts used below are from `xspeed-hub/test-stacks/server-inventory/sandbo
 
 ## 2. Secrets (names only)
 
-From the Mac, in the fork checkout. Every host command builds a Cloudflare client, so wrap it as the ops doc says (`sb secrets run --source personal --secret XSPEED_CF_API_TOKEN=CLOUDFLARE_API_TOKEN -- …`).
+Only the database passwords, both generated. From the Mac, in the fork checkout (every host command builds a Cloudflare client, so wrap it as the ops doc says: `sb secrets run --source personal --secret XSPEED_CF_API_TOKEN=CLOUDFLARE_API_TOKEN -- …`):
 
 | Container key | Sandbox secret | How |
 |---------------|----------------|-----|
 | `DB_PASSWORD` | `AGENT_NOTES_DB_PASSWORD` | generated: `sb host secrets --project-dir <fork> --environment sandbox --generate` |
 | `DB_ROOT_PASSWORD` | `AGENT_NOTES_DB_ROOT_PASSWORD` | generated (same command) |
-| `ADMIN_EMAIL` | `AGENT_NOTES_ADMIN_EMAIL` | `--set AGENT_NOTES_ADMIN_EMAIL`: the seeded admin's sign-in address (it signs in by emailed code) |
-| `MAIL_PRIMARY_HOST` | `AGENT_NOTES_MAIL_HOST` | `--set` |
-| `MAIL_PRIMARY_USERNAME` | `AGENT_NOTES_MAIL_USERNAME` | `--set` |
-| `MAIL_PRIMARY_PASSWORD` | `AGENT_NOTES_MAIL_PASSWORD` | `--set` |
-| `MAIL_PRIMARY_FROM_ADDRESS` | `AGENT_NOTES_MAIL_FROM_ADDRESS` | `--set` |
 
-`MAIL_PRIMARY_PORT` (587) and `MAIL_PRIMARY_ENCRYPTION` (tls) are plain values in the manifest; change them there if the SMTP server needs others. The failover SMTP block is left empty. `ADMIN_EMAIL` only applies when `migrate` creates a fresh database.
+No mail. The owner decided everyone on the tailnet is trusted, so `FEATURE_TAILNET_TRUST` signs tailnet visitors in as `notes-admin@example.test` (a placeholder identifier that is never mailed). It is created as admin on first use.
 
 ## 3. Apply (public host)
 
@@ -97,11 +92,11 @@ server {
 
 ## 7. First sign-in and checks
 
-1. On a tailnet device, open `https://notes.xspeedcdn.online/login`, choose the email code and use `ADMIN_EMAIL`. The first sign-in shows an API token once.
+1. On a tailnet device, open `https://notes.xspeedcdn.online/dashboard`. You are signed in as `notes-admin@example.test` with no code. Create an API token there.
 2. Connect an agent: `claude mcp add --transport http --scope user agent-notes https://notes.xspeedcdn.online/mcp --header "Authorization: Bearer <token>"`.
-3. From a machine **off** the tailnet, each of these must return the same `404 Not found.`: `https://share.xspeedcdn.online/`, `/dashboard`, `/login`, `POST /mcp`, and `/n/<slug>` of a tailnet note. `/robots.txt` returns 200.
+3. From a machine **off** the tailnet, each of these must return the same `404 Not found.` with no `Set-Cookie`: `https://share.xspeedcdn.online/`, `/dashboard`, `/login`, `POST /mcp`, and `/n/<slug>` of a tailnet note. `/robots.txt` returns 200.
 4. Off the tailnet, `https://notes.xspeedcdn.online` must not connect (the name resolves to the tailnet IP).
-5. Create a share link with `create_share_link`, open it off the tailnet: it lands on `/n/<slug>` with no token in the address bar. Revoke it; a reload returns 404.
+5. Create a share link from the dashboard or with `create_share_link`, then open it off the tailnet. It lands on `/n/<slug>` with no token in the address bar. Revoke it, and a reload returns 404.
 
 ## 8. Rollback
 
