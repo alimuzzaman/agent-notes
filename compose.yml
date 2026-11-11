@@ -9,6 +9,7 @@ name: agent-notes
 x-app-env: &app-env
   APP_NAME: ${APP_NAME:-Agent Notes}
   APP_URL: ${APP_URL:?set APP_URL to the full app's https URL}
+  APP_SOURCE_REVISION: ${APP_SOURCE_REVISION:-}
   APP_DEBUG: "false"
   DB_HOST: db
   DB_PORT: "3306"
@@ -55,6 +56,7 @@ services:
     image: mariadb:11.4
     restart: unless-stopped
     environment:
+      APP_SOURCE_REVISION: ${APP_SOURCE_REVISION:-}
       MARIADB_DATABASE: agent_notes
       MARIADB_USER: agent_notes
       MARIADB_PASSWORD: ${DB_PASSWORD:?}
@@ -109,6 +111,7 @@ services:
     image: agent-notes/web:local
     restart: unless-stopped
     environment:
+      APP_SOURCE_REVISION: ${APP_SOURCE_REVISION:-}
       ROBOTS_NOINDEX: ${ROBOTS_NOINDEX:-false} # nginx tags its own errors too (docker/nginx-robots.sh)
     depends_on:
       - app

@@ -22,6 +22,8 @@ environments:
     deploy:
       allowed_branches: [main, feat/html-notes-images-visibility]
       require_clean: true
+      derived_environment:
+        APP_SOURCE_REVISION: pushed_commit_sha
     robots: deny
     host:
       primary: share.xspeedcdn.online
