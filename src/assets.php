@@ -203,8 +203,9 @@ function asset_headers(string $mime, bool $public): array
         'Content-Disposition: inline',
         'Referrer-Policy: no-referrer',
         'X-Robots-Tag: ' . robots_tag(),
-        // Names are content hashes, so a cached copy is never stale. Non-public notes stay out of shared caches.
-        'Cache-Control: ' . ($public ? 'public, max-age=86400' : 'private, max-age=3600'),
+        // Public content hashes may be cached. Protected assets must reach authorization on each
+        // request, even when a share link expires or is revoked after an image was first loaded.
+        'Cache-Control: ' . ($public ? 'public, max-age=86400' : 'private, no-store'),
     ];
 }
 

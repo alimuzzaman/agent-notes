@@ -38,8 +38,11 @@ $asset = implode("\n", asset_headers('image/png', true));
 str_contains($asset, 'X-Content-Type-Options: nosniff') || $fail('asset without nosniff');
 str_contains($asset, 'Content-Type: image/png') || $fail('asset content type not fixed');
 preg_match('/Content-Security-Policy:.*sandbox/', $asset) || $fail('asset without CSP sandbox');
-str_contains($asset, 'Cache-Control:') || $fail('asset without Cache-Control');
-str_contains(implode("\n", asset_headers('image/png', false)), 'private') || $fail('non-public asset is cacheable by shared caches');
+str_contains($asset, 'Cache-Control: public, max-age=86400') || $fail('public asset lost its cache policy');
+// A protected share may expire or be revoked between image requests. A fresh private cache entry
+// would skip the server's grant check, so protected responses must not be stored by the browser.
+$private = implode("\n", asset_headers('image/png', false));
+str_contains($private, 'Cache-Control: private, no-store') || $fail('non-public asset can bypass grant checks through the browser cache');
 
 echo $failed === 0 ? "html_note_headers: sandboxed, opaque origin, nosniff, no-referrer\n" : "html_note_headers: $failed failing\n";
 exit($failed === 0 ? 0 : 1);
