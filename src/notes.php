@@ -24,6 +24,9 @@ function note_columns(): string
     if (feature(Feature::Visibility)) {
         $cols .= ', visibility';
     }
+    if (feature(Feature::NotesLibrary)) {
+        $cols .= ', kind, collection, token_name';
+    }
     return $cols;
 }
 
@@ -69,7 +72,7 @@ function generate_slug(): string
 }
 
 /** @return array{0: ?array, 1: ?string} [note, error] */
-function create_note(int $userId, string $title, string $content, ?string $filename = null, ?NoteFormat $format = null, ?Visibility $visibility = null): array
+function create_note(int $userId, string $title, string $content, ?string $filename = null, ?NoteFormat $format = null, ?Visibility $visibility = null, array $metadata = []): array
 {
     $title = trim($title);
     if ($title === '') {
@@ -91,6 +94,10 @@ function create_note(int $userId, string $title, string $content, ?string $filen
         $cols .= ', visibility';
         $extra[] = ($visibility ?? Visibility::Tailnet)->value;
     }
+    if (feature(Feature::NotesLibrary)) {
+        $cols .= ', collection, token_name';
+        array_push($extra, $metadata['collection'] ?? null, $metadata['token_name'] ?? null);
+    }
     $stmt = db()->prepare("INSERT INTO notes ({$cols}) VALUES (" . rtrim(str_repeat('?, ', 6 + count($extra)), ', ') . ')');
     // ponytail: retry loop is the cheap fix for the smaller 8-char space; 62^8 ≈ 2e14 keeps collisions near-never.
     for ($try = 0; ; $try++) {
@@ -108,7 +115,7 @@ function create_note(int $userId, string $title, string $content, ?string $filen
     return [get_note($slug, $userId), null];
 }
 
-function get_note(string $slug, ?int $userId = null): ?array
+function get_note(string $slug, ?int $userId = null, array $filters = []): ?array
 {
     // ponytail: explicit columns so the pdf_cache blob never rides along on page views
     $sql = 'SELECT ' . note_columns() . ' FROM notes WHERE slug = ?';
@@ -117,13 +124,21 @@ function get_note(string $slug, ?int $userId = null): ?array
         $sql .= ' AND user_id = ?';
         $params[] = $userId;
     }
+    if (feature(Feature::NotesLibrary)) {
+        foreach (['kind', 'collection'] as $key) {
+            if (array_key_exists($key, $filters)) {
+                $sql .= " AND {$key} <=> ?";
+                $params[] = $filters[$key];
+            }
+        }
+    }
     $stmt = db()->prepare($sql);
     $stmt->execute($params);
     return $stmt->fetch() ?: null;
 }
 
 /** @return array{0: ?array, 1: ?string} [note, error] */
-function update_note(int $userId, string $slug, ?string $title, ?string $content, ?string $filename = null, ?NoteFormat $format = null, ?Visibility $visibility = null): array
+function update_note(int $userId, string $slug, ?string $title, ?string $content, ?string $filename = null, ?NoteFormat $format = null, ?Visibility $visibility = null, array $metadata = []): array
 {
     $note = get_note($slug, $userId);
     if (!$note) {
@@ -131,7 +146,11 @@ function update_note(int $userId, string $slug, ?string $title, ?string $content
     }
     $format = feature(Feature::HtmlNotes) ? $format : null;
     $visibility = feature(Feature::Visibility) ? $visibility : null;
-    if ($title === null && $content === null && $filename === null && $format === null && $visibility === null) {
+    $fields = [];
+    if (feature(Feature::NotesLibrary) && array_key_exists('collection', $metadata)) {
+        $fields['collection'] = $metadata['collection'];
+    }
+    if ($title === null && $content === null && $filename === null && $format === null && $visibility === null && !$fields) {
         return [null, 'provide title, content, and/or filename to update'];
     }
     if ($content !== null) {
@@ -140,25 +159,29 @@ function update_note(int $userId, string $slug, ?string $title, ?string $content
         if ($size > $max) {
             return [null, "content is {$size} bytes; the maximum is {$max} bytes (1 MB)"];
         }
-        db()->prepare('UPDATE notes SET content = ?, size_bytes = ?, pdf_cache = NULL WHERE id = ?')
-            ->execute([$content, $size, $note['id']]);
+        $fields += ['content' => $content, 'size_bytes' => $size];
     }
     if ($title !== null && trim($title) !== '') {
-        db()->prepare('UPDATE notes SET title = ?, pdf_cache = NULL WHERE id = ?')
-            ->execute([substr(trim($title), 0, 255), $note['id']]);
+        $fields['title'] = substr(trim($title), 0, 255);
     }
     if ($filename !== null && trim($filename) !== '') {
-        db()->prepare('UPDATE notes SET filename = ?, pdf_cache = NULL WHERE id = ?')
-            ->execute([slugify($filename), $note['id']]);
+        $fields['filename'] = slugify($filename);
     }
     if ($format !== null) {
-        db()->prepare('UPDATE notes SET format = ?, pdf_cache = NULL WHERE id = ?')->execute([$format->value, $note['id']]);
+        $fields['format'] = $format->value;
     }
-    if ($visibility !== null) { // only ever an explicit argument: nothing changes visibility implicitly
-        // pdf_cache = NULL: the PDF prints the note's URL, which changes host with visibility
-        db()->prepare('UPDATE notes SET visibility = ?, pdf_cache = NULL WHERE id = ?')->execute([$visibility->value, $note['id']]);
+    if ($visibility !== null) {
+        $fields['visibility'] = $visibility->value;
     }
-    return [get_note($slug, $userId), null];
+    if ($fields) {
+        if (feature(Feature::NotesLibrary) && isset($metadata['token_name'])) {
+            $fields['token_name'] = $metadata['token_name'];
+        }
+        $set = implode(', ', array_map(fn($column) => $column . ' = ?', array_keys($fields)));
+        db()->prepare("UPDATE notes SET {$set}, pdf_cache = NULL WHERE id = ?")->execute([...array_values($fields), $note['id']]);
+    }
+    $updated = get_note($slug, $userId);
+    return $updated ? [$updated, null] : [null, "note '{$slug}' not found"];
 }
 
 function list_notes(int $userId, int $limit = 50, int $offset = 0): array
@@ -177,9 +200,17 @@ function list_notes(int $userId, int $limit = 50, int $offset = 0): array
     return $stmt->fetchAll();
 }
 
-function delete_note(int $userId, string $slug): bool
+function delete_note(int $userId, string $slug, array $filters = []): bool
 {
-    return delete_notes('slug = ? AND user_id = ?', [$slug, $userId]) > 0;
+    $where = 'slug = ? AND user_id = ?';
+    $params = [$slug, $userId];
+    foreach (['kind', 'collection'] as $key) {
+        if (array_key_exists($key, $filters)) {
+            $where .= " AND {$key} <=> ?";
+            $params[] = $filters[$key];
+        }
+    }
+    return delete_notes($where, $params) > 0;
 }
 
 /**
@@ -194,10 +225,23 @@ function delete_notes(string $where, array $params): int
     return count(delete_locked($where, $params));
 }
 
-/** Deletes a user and everything they own (notes and their assets; tokens and sessions cascade). */
+/** Deletes a user, their notes and mockups, and any files no longer in use. */
 function delete_user(int $userId): void
 {
-    delete_locked('user_id = ?', [$userId], $userId);
+    $mockupStorage = feature(Feature::NotesLibrary)
+        || (is_dir(asset_root() . '/mockups') && db()->query("SHOW TABLES LIKE 'mockups'")->fetchColumn());
+    if (!$mockupStorage) {
+        delete_locked('user_id = ?', [$userId], $userId);
+        return;
+    }
+    $lock = lock_mockup_blobs();
+    $cleanup = [];
+    try {
+        $cleanup = mockup_blob_hashes($userId, byOwner: true);
+        delete_locked('user_id = ?', [$userId], $userId);
+    } finally {
+        release_mockup_blobs($lock, $cleanup);
+    }
 }
 
 /**

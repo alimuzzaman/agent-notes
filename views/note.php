@@ -154,6 +154,13 @@ addEventListener('DOMContentLoaded', () => {
         </div>
     </div>
 </header>
+<?php if ($library ?? false): ?>
+    <nav class="no-print mx-auto flex max-w-5xl flex-wrap gap-4 px-4 pt-4 text-sm" aria-label="Publishing navigation">
+        <?php foreach (note_library_nav($note, $viewer) as [$href, $label]): ?>
+            <a class="underline" href="<?= e($href) ?>"><?= e($label) ?></a>
+        <?php endforeach; ?>
+    </nav>
+<?php endif; ?>
 <main class="max-w-5xl mx-auto px-4 py-6 sm:py-10">
 <!-- Dark reading surfaces use GitHub's canvas hexes, not slate: card/editor #0d1117, pre blocks #161b22 (one step
      lighter, so code separates), inner strips a neutral white/5. Slate is blue-tinted and clashes with the

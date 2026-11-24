@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 // Serving a note to a Reader, shared by the full app and the public host.
 
+const HTML_NOTE_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads';
+
 /**
  * Headers for an HTML note. The page is served top-level on the app's origin, and the CSP sandbox
  * (no allow-same-origin) is what keeps it from acting as the app: the browser gives it a unique opaque
@@ -16,7 +18,7 @@ function html_note_headers(): array
 {
     return [
         'Content-Type: text/html; charset=utf-8',
-        'Content-Security-Policy: sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads',
+        'Content-Security-Policy: sandbox ' . HTML_NOTE_SANDBOX,
         'X-Content-Type-Options: nosniff',
         'Referrer-Policy: no-referrer',
         'X-Robots-Tag: ' . robots_tag(),
@@ -31,7 +33,16 @@ function serve_note(array $note, string $mode, ?array $share = null): never
     if ($mode === '' && $share) {
         share_audit((int) $share['id'], (int) $note['id'], 'viewed');
     }
+    $library = feature(Feature::NotesLibrary) && request_scope() === Scope::Full;
     if (note_format($note) === NoteFormat::Html) {
+        if ($library && $mode === '') {
+            library_headers();
+            $title = $note['title'];
+            $nav = note_library_nav($note, current_user());
+            $frame = '/n/' . $note['slug'] . '/preview';
+            echo view('library_preview', compact('title', 'nav', 'frame'));
+            exit;
+        }
         foreach (html_note_headers() as $h) {
             header($h);
         }
@@ -61,7 +72,7 @@ function serve_note(array $note, string $mode, ?array $share = null): never
     }
     $note['views'] += count_note_view($note);
     http_response_code(200);
-    echo view('note', ['note' => $note, 'html' => markdown_to_html($note['content'])]);
+    echo view('note', ['note' => $note, 'html' => markdown_to_html($note['content']), 'library' => $library]);
     exit;
 }
 
@@ -88,7 +99,7 @@ function public_not_found(): never
  * notes and their assets, share links and the notes they open, robots.txt. No sessions, no forms, no
  * MCP, no dashboard; every other path is public_not_found().
  */
-function public_scope_handle(string $path, string $method): never
+function public_scope_handle(string $path, string $method, string $rawPath): never
 {
     header('Referrer-Policy: no-referrer');
     if ($method !== 'GET' && $method !== 'HEAD') {
@@ -99,6 +110,9 @@ function public_scope_handle(string $path, string $method): never
     }
     if (feature(Feature::ShareLinks) && preg_match('#^/s/([^/]+)$#', $path, $m)) {
         share_open($m[1]);
+    }
+    if (feature(Feature::NotesLibrary) && feature(Feature::ShareLinks) && str_starts_with($rawPath, '/m/')) {
+        mockup_render($rawPath, public: true);
     }
     if (preg_match('#^/n/([A-Za-z0-9-]+)(?:(/raw|/download|/pdf)|/assets/([^/]+))?$#', $path, $m)) {
         $note = get_note($m[1]);

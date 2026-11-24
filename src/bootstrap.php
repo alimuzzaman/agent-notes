@@ -262,3 +262,6 @@ require __DIR__ . '/export.php';
 require __DIR__ . '/assets.php';
 require __DIR__ . '/share.php';
 require __DIR__ . '/serve.php';
+require __DIR__ . '/mockups.php';
+require __DIR__ . '/library.php';
+require __DIR__ . '/mockup_mcp.php';

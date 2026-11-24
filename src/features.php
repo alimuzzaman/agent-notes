@@ -8,6 +8,7 @@ declare(strict_types=1);
 
 enum Feature: string
 {
+    case NotesLibrary = 'FEATURE_NOTES_LIBRARY';
     case HtmlNotes = 'FEATURE_HTML_NOTES';   // format "html": a full page served top-level under a CSP sandbox
     case Assets = 'FEATURE_ASSETS';          // upload_asset: images stored per note, outside public/
     case Visibility = 'FEATURE_VISIBILITY';  // tailnet/public split across two listeners
@@ -17,11 +18,30 @@ enum Feature: string
 
 function feature(Feature $f): bool
 {
+    if ($f === Feature::NotesLibrary && (!feature(Feature::Visibility) || !feature(Feature::HtmlNotes))) {
+        return false;
+    }
     // Share links are served on the public host, so they need the visibility split to exist.
     if ($f === Feature::ShareLinks && !feature(Feature::Visibility)) {
         return false;
     }
     return strtolower((string) env($f->value, 'false')) === 'true';
+}
+
+enum NoteKind: string
+{
+    case Note = 'note';
+    case Page = 'page';
+
+    public function format(): NoteFormat
+    {
+        return $this === self::Page ? NoteFormat::Html : NoteFormat::Markdown;
+    }
+}
+
+function valid_library_name(string $collection): bool
+{
+    return preg_match('/^[a-z0-9][a-z0-9-]{0,119}$/D', $collection) === 1;
 }
 
 enum NoteFormat: string
@@ -56,7 +76,8 @@ enum Scope
  */
 function request_scope(): Scope
 {
-    if (!feature(Feature::Visibility)) {
+    $libraryRequested = strtolower((string) env(Feature::NotesLibrary->value, 'false')) === 'true';
+    if (!feature(Feature::Visibility) && !$libraryRequested) {
         return Scope::Full;
     }
     return ($_SERVER['AGENT_NOTES_SCOPE'] ?? null) === 'tailnet' ? Scope::Full : Scope::Public;

@@ -61,15 +61,66 @@ CREATE TABLE notes (
     pdf_cache MEDIUMBLOB NULL,
     format VARCHAR(10) NOT NULL DEFAULT 'markdown',    -- FEATURE_HTML_NOTES: markdown | html
     visibility VARCHAR(10) NOT NULL DEFAULT 'tailnet', -- FEATURE_VISIBILITY: tailnet | public
+    kind VARCHAR(4) GENERATED ALWAYS AS (IF(format = 'html', 'page', 'note')) STORED,
+    collection VARCHAR(120) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    token_name VARCHAR(100) NULL,
+    FULLTEXT INDEX idx_notes_search (title, content),
+    INDEX idx_notes_collection (user_id, collection, filename),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE mockups (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id INT UNSIGNED NOT NULL,
+    name VARCHAR(120) CHARACTER SET ascii COLLATE ascii_bin NOT NULL UNIQUE,
+    title VARCHAR(255) NOT NULL,
+    current_version INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE mockup_versions (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    mockup_id INT UNSIGNED NOT NULL,
+    number INT UNSIGNED NOT NULL,
+    message VARCHAR(500) NOT NULL,
+    token_name VARCHAR(100) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (mockup_id, number),
+    FOREIGN KEY (mockup_id) REFERENCES mockups(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE mockup_files (
+    version_id INT UNSIGNED NOT NULL,
+    path VARBINARY(512) NOT NULL,
+    mime_type VARCHAR(100) NOT NULL,
+    content_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    size_bytes INT UNSIGNED NOT NULL,
+    PRIMARY KEY (version_id, path),
+    INDEX idx_mockup_file_hash (content_hash),
+    FOREIGN KEY (version_id) REFERENCES mockup_versions(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE mockup_draft_files (
+    mockup_id INT UNSIGNED NOT NULL,
+    draft VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    path VARBINARY(512) NOT NULL,
+    mime_type VARCHAR(100) NOT NULL,
+    content_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    size_bytes INT UNSIGNED NOT NULL,
+    PRIMARY KEY (mockup_id, draft, path),
+    INDEX idx_mockup_draft_hash (content_hash),
+    FOREIGN KEY (mockup_id) REFERENCES mockups(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- FEATURE_SHARE_LINKS: read links to one tailnet note. Only sha256(token) is stored.
 CREATE TABLE share_links (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    note_id INT UNSIGNED NOT NULL,
+    note_id INT UNSIGNED NULL,
+    mockup_version_id INT UNSIGNED NULL,
     token_hash CHAR(64) NOT NULL UNIQUE,
     created_by INT UNSIGNED NULL,
     created_via VARCHAR(10) NOT NULL,
@@ -79,6 +130,7 @@ CREATE TABLE share_links (
     use_count INT UNSIGNED NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
+    CONSTRAINT fk_share_mockup_version FOREIGN KEY (mockup_version_id) REFERENCES mockup_versions(id) ON DELETE CASCADE,
     FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -87,7 +139,8 @@ CREATE TABLE share_links (
 CREATE TABLE share_link_events (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     share_link_id INT UNSIGNED NULL,
-    note_id INT UNSIGNED NOT NULL,
+    note_id INT UNSIGNED NULL,
+    mockup_version_id INT UNSIGNED NULL,
     event VARCHAR(10) NOT NULL,
     actor_user_id INT UNSIGNED NULL,
     client VARCHAR(60) NULL,

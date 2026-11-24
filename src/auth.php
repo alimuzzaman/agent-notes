@@ -290,7 +290,7 @@ function user_from_bearer_token(?string $token): ?array
         return null;
     }
     $stmt = db()->prepare(
-        'SELECT u.*, t.id AS token_id FROM api_tokens t JOIN users u ON u.id = t.user_id
+        'SELECT u.*, t.id AS token_id, t.name AS token_name FROM api_tokens t JOIN users u ON u.id = t.user_id
          WHERE t.token_hash = ? AND t.revoked_at IS NULL'
     );
     $stmt->execute([hash('sha256', $token)]);

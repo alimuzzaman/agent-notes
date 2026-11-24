@@ -98,7 +98,7 @@ foreach (["$repo/public/index.php", "$repo/src/serve.php"] as $file) {
 }
 $slug = 'AbCdEfGh';
 $paths = array_unique(array_merge($literals, array_map(fn($p) => $p . 'x', $prefixes), [
-    "/n/$slug", "/n/$slug/raw", "/n/$slug/download", "/n/$slug/pdf", "/n/$slug/edit",
+    "/n/$slug", "/n/$slug/preview", "/n/c/test", '/n/', '/m/', '/m/mockup/@1/', "/n/$slug/raw", "/n/$slug/download", "/n/$slug/pdf", "/n/$slug/edit",
     "/n/$slug/assets/0123456789abcdef0123.png", '/s/' . str_repeat('A', 43), '/s/short', '/admin/user/1', '/no-such-route',
 ]));
 count($literals) >= 20 || $fail('found only ' . count($literals) . ' route literals; did the routing change shape?');

@@ -4,17 +4,34 @@ declare(strict_types=1);
 
 require __DIR__ . '/../src/bootstrap.php';
 
-$path = rtrim(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?? '/', '/') ?: '/';
+$rawPath = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';
+$path = rtrim($rawPath, '/') ?: '/';
 $method = $_SERVER['REQUEST_METHOD'];
 
 // ---- Public host (FEATURE_VISIBILITY): its own allowlist router, nothing below is reachable ----
 if (request_scope() === Scope::Public) {
-    public_scope_handle($path, $method);
+    public_scope_handle($path, $method, $rawPath);
 }
 
 // ---- MCP (core product) ----
 if ($path === '/mcp') {
     mcp_handle();
+}
+
+if (feature(Feature::NotesLibrary) && ($method === 'GET' || $method === 'HEAD')) {
+    if (in_array($path, ['/', '/n', '/m'], true) || preg_match('#^/n/c/[a-z0-9][a-z0-9-]{0,119}$#D', $path)) {
+        library_index($path);
+    }
+    if (str_starts_with($rawPath, '/m/')) {
+        mockup_render($rawPath, public: false);
+    }
+    if (preg_match('#^/n/([A-Za-z0-9-]+)/preview$#D', $path, $m)) {
+        $note = get_note($m[1]);
+        if (!$note || note_format($note) !== NoteFormat::Html) {
+            public_not_found();
+        }
+        serve_note($note, '/preview');
+    }
 }
 
 // ---- Notes ----
@@ -78,11 +95,11 @@ if (preg_match('#^/n/([A-Za-z0-9-]+)(?:(/raw|/download|/pdf)|/assets/([^/]+))?$#
 if ($path === '/.well-known/mcp/server-card.json') {
     json_response([
         'serverInfo' => [
-            'name' => 'agent-notes',
+            'name' => mcp_server_name(),
             'version' => '1.0.0',
         ],
-        'title' => env('APP_NAME', 'Agent Notes'),
-        'description' => 'Note-publishing service for AI agents. Publish markdown over MCP, get back a clean unlisted URL that renders for humans.',
+        'title' => feature(Feature::NotesLibrary) ? 'Notes' : env('APP_NAME', 'Agent Notes'),
+        'description' => feature(Feature::NotesLibrary) ? 'Publish Markdown notes, HTML pages and versioned mockups.' : 'Note-publishing service for AI agents. Publish markdown over MCP, get back a clean unlisted URL that renders for humans.',
         'url' => app_url('/mcp'),
         'transport' => ['type' => 'streamable-http', 'endpoint' => app_url('/mcp')],
         'protocolVersion' => MCP_PROTOCOL_VERSION,

@@ -13,7 +13,7 @@ $fail = function (string $why) use (&$failed): void {
     $failed++;
     echo "FAIL: $why\n";
 };
-$flags = ['FEATURE_HTML_NOTES', 'FEATURE_ASSETS', 'FEATURE_VISIBILITY', 'FEATURE_SHARE_LINKS'];
+$flags = ['FEATURE_NOTES_LIBRARY', 'FEATURE_HTML_NOTES', 'FEATURE_ASSETS', 'FEATURE_VISIBILITY', 'FEATURE_SHARE_LINKS'];
 $set = function (array $on) use ($flags): void {
     foreach ($flags as $f) {
         unset($_ENV[$f]);
@@ -71,6 +71,16 @@ $set(['FEATURE_VISIBILITY', 'FEATURE_SHARE_LINKS']);
 foreach (['create_share_link', 'list_share_links', 'revoke_share_link'] as $name) {
     isset($tools()[$name]) || $fail("share flag: $name missing");
 }
+
+$set(['FEATURE_NOTES_LIBRARY', 'FEATURE_HTML_NOTES']);
+!isset($tools()['create_mockup']) || $fail('library needs the visibility split');
+request_scope() === Scope::Public || $fail('library requested without visibility must fail closed');
+$set(['FEATURE_NOTES_LIBRARY', 'FEATURE_VISIBILITY']);
+!isset($tools()['create_mockup']) || $fail('library needs HTML support');
+$set(['FEATURE_NOTES_LIBRARY', 'FEATURE_VISIBILITY', 'FEATURE_HTML_NOTES']);
+isset($tools()['create_mockup']) || $fail('library flag: missing mockup tools');
+in_array('kind', $props($tools(), 'create_note'), true) || $fail('library flag: missing note kind');
+mcp_server_name() === 'notes' || $fail('library flag: server name must be notes');
 
 echo $failed === 0 ? "features_off: flags off keep the original surface; each flag adds only its own\n" : "features_off: $failed failing\n";
 exit($failed === 0 ? 0 : 1);

@@ -31,10 +31,15 @@ function share_ttl_hours(?int $requested): array
 
 function share_cookie_options(string $slug, int $linkExpiresAt): array
 {
+    return share_cookie_path_options('/n/' . $slug, $linkExpiresAt);
+}
+
+function share_cookie_path_options(string $path, int $linkExpiresAt): array
+{
     $secure = str_starts_with((string) public_url(), 'https://');
     return [
         'expires' => min($linkExpiresAt, time() + env_int('SHARE_COOKIE_TTL_HOURS', 12) * 3600),
-        'path' => '/n/' . $slug,
+        'path' => $path,
         'secure' => $secure,
         'httponly' => true,
         // None, not Lax: an HTML note runs with an opaque origin (CSP sandbox), so its own <img> requests
@@ -84,14 +89,18 @@ function create_share_link(int $userId, string $slug, ?int $ttlHours, string $vi
 }
 
 /** The Owner's links, newest first, optionally for one note or one link id. Never includes tokens. */
-function share_links_for(int $userId, ?string $slug = null, ?int $id = null): array
+function share_links_for(int $userId, ?string $slug = null, ?int $id = null, bool $mockups = false): array
 {
-    $sql = 'SELECT l.id, n.slug, n.title, l.created_via, l.created_at, l.expires_at, l.revoked_at, l.last_used_at, l.use_count,
-                   CASE WHEN l.revoked_at IS NOT NULL THEN \'revoked\' WHEN l.expires_at <= NOW() THEN \'expired\' ELSE \'active\' END AS status
-            FROM share_links l JOIN notes n ON n.id = l.note_id WHERE n.user_id = ?';
+    $target = $mockups ? 'm.name, m.title, v.number AS version' : 'n.slug, n.title';
+    $join = $mockups
+        ? 'JOIN mockup_versions v ON v.id = l.mockup_version_id JOIN mockups m ON m.id = v.mockup_id WHERE m.user_id = ?'
+        : 'JOIN notes n ON n.id = l.note_id WHERE n.user_id = ?';
+    $sql = "SELECT l.id, {$target}, l.created_via, l.created_at, l.expires_at, l.revoked_at, l.last_used_at, l.use_count,
+                   CASE WHEN l.revoked_at IS NOT NULL THEN 'revoked' WHEN l.expires_at <= NOW() THEN 'expired' ELSE 'active' END AS status
+            FROM share_links l {$join}";
     $params = [$userId];
     if ($slug !== null) {
-        $sql .= ' AND n.slug = ?';
+        $sql .= $mockups ? ' AND m.name = ?' : ' AND n.slug = ?';
         $params[] = $slug;
     }
     if ($id !== null) {
@@ -116,7 +125,7 @@ function revoke_share_link(int $userId, int $id): bool
                            WHERE l.id = ? AND n.user_id = ? AND l.revoked_at IS NULL');
     $stmt->execute([$id, $userId]);
     if ($stmt->rowCount() === 0) {
-        return false;
+        return feature(Feature::NotesLibrary) && revoke_mockup_share_link($userId, $id);
     }
     $note = db()->prepare('SELECT note_id FROM share_links WHERE id = ?');
     $note->execute([$id]);
@@ -131,9 +140,14 @@ function share_link_by_token(string $token): ?array
         return null;
     }
     $hash = hash('sha256', $token);
-    $stmt = db()->prepare('SELECT l.id, l.note_id, l.token_hash, UNIX_TIMESTAMP(l.expires_at) AS expires_ts, n.slug
-                           FROM share_links l JOIN notes n ON n.id = l.note_id
-                           WHERE l.token_hash = ? AND l.revoked_at IS NULL AND l.expires_at > NOW()');
+    $mockups = feature(Feature::NotesLibrary);
+    $target = $mockups ? ', l.mockup_version_id, m.id AS mockup_id, m.name, v.number' : '';
+    $join = $mockups
+        ? 'LEFT JOIN notes n ON n.id = l.note_id LEFT JOIN mockup_versions v ON v.id = l.mockup_version_id LEFT JOIN mockups m ON m.id = v.mockup_id'
+        : 'JOIN notes n ON n.id = l.note_id';
+    $stmt = db()->prepare("SELECT l.id, l.note_id, l.token_hash, UNIX_TIMESTAMP(l.expires_at) AS expires_ts, n.slug {$target}
+                           FROM share_links l {$join}
+                           WHERE l.token_hash = ? AND l.revoked_at IS NULL AND l.expires_at > NOW()");
     $stmt->execute([$hash]);
     $link = $stmt->fetch();
     return ($link && hash_equals($link['token_hash'], $hash)) ? $link : null;
@@ -168,10 +182,22 @@ function share_open(string $token): never
     if (!$link) {
         public_not_found();
     }
-    db()->prepare('UPDATE share_links SET last_used_at = NOW(), use_count = use_count + 1 WHERE id = ?')->execute([$link['id']]);
-    share_audit((int) $link['id'], (int) $link['note_id'], 'opened');
-    setcookie(SHARE_COOKIE, $token, share_cookie_options($link['slug'], (int) $link['expires_ts']));
-    header('Location: /n/' . $link['slug'], true, 303);
+    $stmt = db()->prepare('UPDATE share_links SET last_used_at = NOW(), use_count = use_count + 1
+                           WHERE id = ? AND revoked_at IS NULL AND expires_at > NOW()');
+    $stmt->execute([$link['id']]);
+    if (!$stmt->rowCount()) {
+        public_not_found();
+    }
+    if (isset($link['mockup_version_id'])) {
+        mockup_share_audit((int) $link['id'], (int) $link['mockup_version_id'], 'opened');
+        $path = mockup_url($link['name'], (int) $link['number']);
+        setcookie(MOCKUP_SHARE_COOKIE, $token, share_cookie_path_options($path, (int) $link['expires_ts']));
+    } else {
+        share_audit((int) $link['id'], (int) $link['note_id'], 'opened');
+        $path = '/n/' . $link['slug'];
+        setcookie(SHARE_COOKIE, $token, share_cookie_options($link['slug'], (int) $link['expires_ts']));
+    }
+    header('Location: ' . $path, true, 303);
     exit;
 }
 
@@ -183,7 +209,81 @@ function share_cookie_grants(array $note): ?array
         return null;
     }
     $link = share_link_by_token($token);
-    if ($link && (int) $link['note_id'] === (int) $note['id']) {
+    if (isset($link['note_id']) && (int) $link['note_id'] === (int) $note['id']) {
+        return $link;
+    }
+    share_guess(count: true);
+    return null;
+}
+
+const MOCKUP_SHARE_COOKIE = 'an_mockup_share';
+
+function mockup_share_audit(int $linkId, int $versionId, string $event, ?int $actorId = null): void
+{
+    db()->prepare('INSERT INTO share_link_events (share_link_id, mockup_version_id, event, actor_user_id, client)
+                   VALUES ((SELECT id FROM share_links WHERE id = ?), ?, ?, ?, ?)')
+        ->execute([$linkId, $versionId, $event, $actorId, substr(ua_label($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 60)]);
+}
+
+function create_mockup_share_link(int $userId, string $name, ?int $number, ?int $ttlHours): array
+{
+    if (public_url() === null) {
+        return [null, 'share links need PUBLIC_URL (the public host) to be configured'];
+    }
+    [$hours, $error] = share_ttl_hours($ttlHours);
+    if ($error) {
+        return [null, $error];
+    }
+    [$token, $hash] = new_share_token();
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $mockup = get_mockup($name, $userId, lock: true);
+        $version = $mockup ? mockup_version($mockup, $number) : null;
+        if (!$version) {
+            $pdo->rollBack();
+            return [null, 'Mockup version not found.'];
+        }
+        $pdo->prepare("INSERT INTO share_links (mockup_version_id, token_hash, created_by, created_via, expires_at)
+                       VALUES (?, ?, ?, 'mcp', NOW() + INTERVAL ? HOUR)")
+            ->execute([$version['id'], $hash, $userId, $hours]);
+        $id = (int) $pdo->lastInsertId();
+        mockup_share_audit($id, (int) $version['id'], 'created', $userId);
+        $link = share_links_for($userId, null, $id, mockups: true)[0];
+        $pdo->commit();
+        return [$link + ['url' => share_url($token)], null];
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
+}
+
+function revoke_mockup_share_link(int $userId, int $id): bool
+{
+    $stmt = db()->prepare('UPDATE share_links l JOIN mockup_versions v ON v.id = l.mockup_version_id
+                           JOIN mockups m ON m.id = v.mockup_id SET l.revoked_at = NOW()
+                           WHERE l.id = ? AND m.user_id = ? AND l.revoked_at IS NULL');
+    $stmt->execute([$id, $userId]);
+    if (!$stmt->rowCount()) {
+        return false;
+    }
+    $stmt = db()->prepare('SELECT mockup_version_id FROM share_links WHERE id = ?');
+    $stmt->execute([$id]);
+    $versionId = $stmt->fetchColumn();
+    if ($versionId) {
+        mockup_share_audit($id, (int) $versionId, 'revoked', $userId);
+    }
+    return true;
+}
+
+function mockup_share_grants(string $name, int $number): ?array
+{
+    $token = $_COOKIE[MOCKUP_SHARE_COOKIE] ?? '';
+    if (!is_string($token) || $token === '' || share_guess(count: false)) {
+        return null;
+    }
+    $link = share_link_by_token($token);
+    if (isset($link['mockup_version_id']) && $link['name'] === $name && (int) $link['number'] === $number) {
         return $link;
     }
     share_guess(count: true);

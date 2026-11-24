@@ -138,6 +138,40 @@ function mcp_feature_tools(array $tools): array
             'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer', 'description' => 'The link id from create_share_link or list_share_links']], 'required' => ['id']],
         ];
     }
+    if (feature(Feature::NotesLibrary)) {
+        $kind = ['type' => 'string', 'enum' => ['note', 'page']];
+        $collection = ['type' => ['string', 'null'], 'pattern' => '^[a-z0-9][a-z0-9-]{0,119}$'];
+        foreach (['create_note', 'update_note', 'get_note', 'list_notes', 'delete_note'] as $tool) {
+            $byName[$tool]['inputSchema']['properties'] += ['kind' => $kind, 'collection' => $collection];
+        }
+        $byName['create_note']['description'] = 'Publish a Markdown note or an HTML page.';
+        $byName['update_note']['description'] = 'Update a note or page without changing its slug.';
+        foreach (['create_note', 'update_note'] as $tool) {
+            $byName[$tool]['inputSchema']['properties']['content']['description'] = 'Markdown text or a complete HTML document, up to the note size limit.';
+        }
+        $byName['create_note']['inputSchema']['properties']['kind']['description'] = 'Defaults to note when neither kind nor format is supplied.';
+        $byName['update_note']['inputSchema']['properties']['collection']['description'] = 'Omit to keep the collection. Pass null to clear it.';
+        $byName['get_note']['description'] = 'Get a note or page with its content.';
+        $byName['list_notes']['inputSchema']['properties']['query'] = ['type' => 'string'];
+        if (isset($byName['upload_asset'])) {
+            $byName['upload_asset']['description'] .= ' For a mockup, pass name, path and base64 data to stage a file.';
+            $byName['upload_asset']['inputSchema']['required'] = ['data'];
+            $byName['upload_asset']['inputSchema']['properties'] += [
+                'name' => ['type' => 'string'], 'path' => ['type' => 'string'], 'draft' => ['type' => 'string'],
+            ];
+        }
+        if (isset($byName['create_share_link'])) {
+            $byName['create_share_link']['description'] .= ' Pass name instead of slug to share one mockup version. The default is the current version.';
+            $byName['create_share_link']['inputSchema']['required'] = [];
+            $byName['create_share_link']['inputSchema']['properties'] += [
+                'name' => ['type' => 'string'], 'version' => ['type' => 'integer', 'minimum' => 1],
+            ];
+            $byName['list_share_links']['inputSchema']['properties'] += [
+                'name' => ['type' => 'string'], 'kind' => ['type' => 'string', 'enum' => ['mockup']],
+            ];
+        }
+        return [...array_values($byName), ...mcp_mockup_tools()];
+    }
     return array_values($byName);
 }
 
@@ -182,6 +216,9 @@ function note_summary(array $note, bool $withContent = false): array
     if ($withContent) {
         $out['content'] = $note['content'];
     }
+    if (feature(Feature::NotesLibrary)) {
+        $out += ['kind' => $note['kind'], 'collection' => $note['collection'], 'token_name' => $note['token_name']];
+    }
     return $out;
 }
 
@@ -216,6 +253,9 @@ function mcp_handle(): never
     $id = $request['id'] ?? null;
     $params = $request['params'] ?? [];
 
+    if (!is_string($method)) {
+        mcp_error($id, -32600, 'Invalid request method.');
+    }
     if (str_starts_with($method, 'notifications/')) {
         http_response_code(202);
         exit;
@@ -226,8 +266,8 @@ function mcp_handle(): never
             mcp_result($id, [
                 'protocolVersion' => MCP_PROTOCOL_VERSION,
                 'capabilities' => ['tools' => (object) []],
-                'serverInfo' => ['name' => 'agent-notes', 'title' => env('APP_NAME', 'Agent Notes'), 'version' => '1.0.0'],
-                'instructions' => 'Agent Notes publishes markdown notes to clean, unlisted, shareable URLs. Use create_note to publish and get a URL you can hand to humans; update_note, get_note, list_notes, and delete_note manage the lifecycle. Notes are private-by-obscurity: anyone with the URL can read, nothing is listed or indexed.',
+                'serverInfo' => ['name' => mcp_server_name(), 'title' => feature(Feature::NotesLibrary) ? 'Notes' : env('APP_NAME', 'Agent Notes'), 'version' => '1.0.0'],
+                'instructions' => feature(Feature::NotesLibrary) ? 'Publish Markdown notes, HTML pages and versioned mockups. Use share links to grant access outside the Tailnet.' : 'Agent Notes publishes markdown notes to clean, unlisted, shareable URLs. Use create_note to publish and get a URL you can hand to humans; update_note, get_note, list_notes, and delete_note manage the lifecycle. Notes are private-by-obscurity: anyone with the URL can read, nothing is listed or indexed.',
             ]);
 
         case 'ping':
@@ -237,15 +277,41 @@ function mcp_handle(): never
             mcp_result($id, ['tools' => mcp_tools()]);
 
         case 'tools/call':
-            mcp_tool_call($id, $params['name'] ?? '', $params['arguments'] ?? [], (int) $user['id']);
+            if (!is_string($params['name'] ?? '') || !is_array($params['arguments'] ?? [])) {
+                mcp_error($id, -32602, 'Invalid tool name or arguments.');
+            }
+            mcp_tool_call($id, $params['name'] ?? '', $params['arguments'] ?? [], (int) $user['id'], (int) $user['token_id'], $user['token_name']);
 
         default:
             mcp_error($id, -32601, "Method not found: {$method}");
     }
 }
 
-function mcp_tool_call(mixed $id, string $tool, array $args, int $userId): never
+function mcp_server_name(): string
 {
+    return feature(Feature::NotesLibrary) ? 'notes' : 'agent-notes';
+}
+
+function mcp_tool_call(mixed $id, string $tool, array $args, int $userId, ?int $tokenId = null, ?string $tokenName = null): never
+{
+    $filters = $metadata = [];
+    if (feature(Feature::NotesLibrary) && in_array($tool, ['create_note', 'update_note', 'get_note', 'list_notes', 'delete_note'], true)) {
+        try {
+            $filters = mcp_note_filters($args);
+            if (in_array($tool, ['create_note', 'update_note'], true)) {
+                $metadata = array_intersect_key($filters, ['collection' => true]) + ['token_name' => $tokenName];
+                if (isset($filters['kind'])) {
+                    $format = NoteKind::from($filters['kind'])->format()->value;
+                    if (isset($args['format']) && $args['format'] !== $format) {
+                        throw new DomainException('kind and format must agree.');
+                    }
+                    $args['format'] = $format;
+                }
+            }
+        } catch (DomainException $e) {
+            mcp_tool_result($id, ['error' => $e->getMessage()], true);
+        }
+    }
     switch ($tool) {
         case 'create_note':
             if (!isset($args['title'], $args['content']) || !is_string($args['title']) || !is_string($args['content'])) {
@@ -255,7 +321,7 @@ function mcp_tool_call(mixed $id, string $tool, array $args, int $userId): never
             if ($error) {
                 mcp_tool_result($id, ['error' => $error], true);
             }
-            [$note, $error] = create_note($userId, $args['title'], $args['content'], isset($args['filename']) && is_string($args['filename']) ? $args['filename'] : null, $format, $visibility);
+            [$note, $error] = create_note($userId, $args['title'], $args['content'], isset($args['filename']) && is_string($args['filename']) ? $args['filename'] : null, $format, $visibility, $metadata);
             if ($error) {
                 mcp_tool_result($id, ['error' => $error], true);
             }
@@ -279,7 +345,8 @@ function mcp_tool_call(mixed $id, string $tool, array $args, int $userId): never
                 isset($args['content']) && is_string($args['content']) ? $args['content'] : null,
                 isset($args['filename']) && is_string($args['filename']) ? $args['filename'] : null,
                 $format,
-                $visibility
+                $visibility,
+                $metadata
             );
             if ($error) {
                 mcp_tool_result($id, ['error' => $error], true);
@@ -290,7 +357,7 @@ function mcp_tool_call(mixed $id, string $tool, array $args, int $userId): never
             if (empty($args['slug']) || !is_string($args['slug'])) {
                 mcp_tool_result($id, ['error' => 'slug is required'], true);
             }
-            $note = get_note($args['slug'], $userId);
+            $note = get_note($args['slug'], $userId, $filters);
             if (!$note) {
                 mcp_tool_result($id, ['error' => "note '{$args['slug']}' not found"], true);
             }
@@ -301,7 +368,16 @@ function mcp_tool_call(mixed $id, string $tool, array $args, int $userId): never
             mcp_tool_result($id, $out);
 
         case 'list_notes':
-            $notes = list_notes($userId, (int) ($args['limit'] ?? 50), (int) ($args['offset'] ?? 0));
+            $limit = max(1, min(200, (int) ($args['limit'] ?? 50)));
+            $offset = max(0, (int) ($args['offset'] ?? 0));
+            if (feature(Feature::NotesLibrary)) {
+                if (!is_string($args['query'] ?? '')) {
+                    mcp_tool_result($id, ['error' => 'query must be a string'], true);
+                }
+                $notes = library_notes($userId, $filters + ['query' => $args['query'] ?? ''], $limit, $offset);
+            } else {
+                $notes = list_notes($userId, $limit, $offset);
+            }
             mcp_tool_result($id, [
                 'count' => count($notes),
                 'notes' => array_map(fn($n) => note_summary($n), $notes),
@@ -311,14 +387,40 @@ function mcp_tool_call(mixed $id, string $tool, array $args, int $userId): never
             if (empty($args['slug']) || !is_string($args['slug'])) {
                 mcp_tool_result($id, ['error' => 'slug is required'], true);
             }
-            if (!delete_note($userId, $args['slug'])) {
+            if (!delete_note($userId, $args['slug'], $filters)) {
                 mcp_tool_result($id, ['error' => "note '{$args['slug']}' not found"], true);
             }
             mcp_tool_result($id, ['message' => "Note '{$args['slug']}' deleted. Its URL no longer works."]);
 
         default:
+            if (feature(Feature::NotesLibrary)
+                && (in_array($tool, array_column(mcp_mockup_tools(), 'name'), true)
+                    || ($tool === 'upload_asset' && feature(Feature::Assets) && array_key_exists('name', $args)))) {
+                try {
+                    if (array_key_exists('slug', $args)) {
+                        throw new DomainException('Pass name or slug.');
+                    }
+                    mcp_tool_result($id, mcp_mockup_call($tool, $args, $userId, $tokenId, $tokenName));
+                } catch (DomainException $e) {
+                    mcp_tool_result($id, ['error' => $e->getMessage()], true);
+                }
+            }
             mcp_feature_tool_call($id, $tool, $args, $userId);
     }
+}
+
+function mcp_note_filters(array $args): array
+{
+    $filters = array_intersect_key($args, ['kind' => true, 'collection' => true]);
+    if (array_key_exists('kind', $filters)
+        && (!is_string($filters['kind']) || NoteKind::tryFrom($filters['kind']) === null)) {
+        throw new DomainException('kind must be "note" or "page".');
+    }
+    $collection = $filters['collection'] ?? null;
+    if ($collection !== null && (!is_string($collection) || !valid_library_name($collection))) {
+        throw new DomainException('collection must be a lowercase name with letters, digits or hyphens, or null.');
+    }
+    return $filters;
 }
 
 /** @return array{0: ?NoteFormat, 1: ?Visibility, 2: ?string} format and visibility args, when their features are on */
@@ -367,20 +469,43 @@ function mcp_feature_tool_call(mixed $id, string $tool, array $args, int $userId
     if (feature(Feature::ShareLinks)) {
         switch ($tool) {
             case 'create_share_link':
-                if ($slug === '') {
-                    mcp_tool_result($id, ['error' => 'slug is required'], true);
-                }
                 $ttl = $args['ttl_hours'] ?? null;
                 if ($ttl !== null && !is_int($ttl)) {
                     mcp_tool_result($id, ['error' => 'ttl_hours must be an integer'], true);
                 }
-                [$link, $error] = create_share_link($userId, $slug, $ttl, 'mcp');
+                if (feature(Feature::NotesLibrary) && array_key_exists('name', $args)) {
+                    try {
+                        if (array_key_exists('slug', $args)) {
+                            throw new DomainException('Pass name or slug.');
+                        }
+                        [$link, $error] = create_mockup_share_link($userId, mcp_mockup_name($args), mcp_mockup_version($args), $ttl);
+                    } catch (DomainException $e) {
+                        mcp_tool_result($id, ['error' => $e->getMessage()], true);
+                    }
+                } else {
+                    if ($slug === '') {
+                        mcp_tool_result($id, ['error' => 'slug is required'], true);
+                    }
+                    [$link, $error] = create_share_link($userId, $slug, $ttl, 'mcp');
+                }
                 if ($error) {
                     mcp_tool_result($id, ['error' => $error], true);
                 }
                 mcp_tool_result($id, ['message' => 'Share link created. This is the only time its URL is shown; send it only to the person it is for.'] + $link);
             case 'list_share_links':
-                $links = share_links_for($userId, $slug !== '' ? $slug : null);
+                if (feature(Feature::NotesLibrary) && (array_key_exists('name', $args) || ($args['kind'] ?? null) === 'mockup')) {
+                    try {
+                        if (array_key_exists('slug', $args)) {
+                            throw new DomainException('Pass name or slug.');
+                        }
+                        $name = array_key_exists('name', $args) ? mcp_mockup_name($args) : null;
+                    } catch (DomainException $e) {
+                        mcp_tool_result($id, ['error' => $e->getMessage()], true);
+                    }
+                    $links = share_links_for($userId, $name, mockups: true);
+                } else {
+                    $links = share_links_for($userId, $slug !== '' ? $slug : null);
+                }
                 mcp_tool_result($id, ['count' => count($links), 'links' => $links]);
             case 'revoke_share_link':
                 if (!is_int($args['id'] ?? null) || !revoke_share_link($userId, $args['id'])) {
