@@ -20,7 +20,7 @@ environments:
       path: /robots.txt
       statuses: [200]
     deploy:
-      allowed_branches: [main, feat/html-notes-images-visibility]
+      allowed_branches: [main, feat/html-notes-images-visibility, feat/notes-pages-mockups]
       require_clean: true
       derived_environment:
         APP_SOURCE_REVISION: pushed_commit_sha
@@ -39,6 +39,7 @@ environments:
         FEATURE_HTML_NOTES: "true"
         FEATURE_ASSETS: "true"
         FEATURE_VISIBILITY: "true"
+        FEATURE_NOTES_LIBRARY: "true"
         FEATURE_SHARE_LINKS: "true"
         FEATURE_TAILNET_TRUST: "true"
         TAILNET_TRUST_USER_EMAIL: notes-admin@example.test
